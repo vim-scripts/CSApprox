@@ -1,7 +1,7 @@
 " CSApprox:    Make gvim-only colorschemes work transparently in terminal vim
 " Maintainer:  Matthew Wozniski (mjw@drexel.edu)
-" Date:        Wed, 19 Nov 2008 12:14:58 -0500
-" Version:     1.50
+" Date:        Sun, 14 Dec 2008 06:12:55 -0500
+" Version:     2.00
 " History:     :help csapprox-changelog
 
 " Whenever you change colorschemes using the :colorscheme command, this script
@@ -149,25 +149,15 @@ endfunction
 " {>1} Collect info for the set highlights
 
 " {>2} Determine if synIDattr is usable
-" As of 7.2.018, synIDattr() can't be used to check 'guisp', and no official
-" patch has been released despite my suggesting one.  So, in an attempt to be
-" forward compatible, I've included a test to see if synIDattr() works
-" properly.  If synIDattr() works properly, we'll use it to check the 'guisp'
-" attribute, otherwise we'll fall back onto using :redir and checking the
-" output of :highlight.  This test can be overridden by setting the global
-" variable g:CSApprox_redirfallback to 1 (to force use of :redir) or to 0 (to
-" force use of synIDattr()).
+" synIDattr() couldn't support 'guisp' until 7.2.052.  This function returns
+" true if :redir is needed to find the 'guisp' attribute, false if synIDattr()
+" is functional.  This test can be overridden by setting the global variable
+" g:CSApprox_redirfallback to 1 (to force use of :redir) or to 0 (to force use
+" of synIDattr()).
 function! s:NeedRedirFallback()
   if !exists("g:CSApprox_redirfallback")
-    hi CSApproxTest guisp=Red gui=standout
-    if synIDattr(hlID('CSApproxTest'), 'sp', 'gui') == '1'
-      " We requested the 'sp' attribute, but vim thought we wanted 'standout'
-      " So, reporting of the guisp attribute is broken.  Fall back on :redir
-      let g:CSApprox_redirfallback=1
-    else
-      " Reporting guisp works, use synIDattr
-      let g:CSApprox_redirfallback=0
-    endif
+    let g:CSApprox_redirfallback = (v:version == 702 && !has('patch52'))
+                                 \  || v:version < 702
   endif
   return g:CSApprox_redirfallback
 endfunction
@@ -200,9 +190,12 @@ function! s:Highlights()
 
     for where in [ "term", "cterm", "gui" ]
       let rv[i][where]  = {}
-      for attr in [ "fg", "bg", "sp", "bold", "italic",
-            \ "reverse", "underline", "undercurl" ]
+      for attr in [ "bold", "italic", "reverse", "underline", "undercurl" ]
         let rv[i][where][attr] = synIDattr(i, attr, where)
+      endfor
+
+      for attr in [ "fg", "bg", "sp" ]
+        let rv[i][where][attr] = synIDattr(i, attr.'#', where)
       endfor
 
       if s:NeedRedirFallback()
@@ -220,6 +213,12 @@ function! s:Highlights()
         endif
         let rv[i][where]["sp"] = temp
       endif
+
+      for attr in [ "fg", "bg", "sp" ]
+        if rv[i][where][attr] == -1
+          let rv[i][where][attr] = ''
+        endif
+      endfor
     endfor
   endwhile
 
@@ -370,6 +369,19 @@ function! s:attr_map(attr)
   return rv
 endfunction
 
+" {>2} Normalize the GUI settings of a highlight group
+" If the Normal group is cleared, set it to gvim's default, black on white
+" Though this would be a really weird thing for a scheme to do... *shrug*
+function! s:FixupGuiInfo(highlights)
+  if a:highlights[s:hlid_normal].gui.bg == ''
+    let a:highlights[s:hlid_normal].gui.bg = 'white'
+  endif
+
+  if a:highlights[s:hlid_normal].gui.fg == ''
+    let a:highlights[s:hlid_normal].gui.fg = 'black'
+  endif
+endfunction
+
 " {>2} Map gui settings to cterm settings
 " Given information about a highlight group, replace the cterm settings with
 " the mapped gui settings, applying any attribute overrides along the way.  In
@@ -381,57 +393,55 @@ endfunction
 " ensure that the 'sp' attribute is never set for cterm, since no terminal can
 " handle that particular highlight.  If the user wants to display the guisp
 " color, he should map it to either 'fg' or 'bg' using g:CSApprox_attr_map.
-function! s:FixupCtermInfo(hl)
-  let hl = a:hl
+function! s:FixupCtermInfo(highlights)
+  for hl in values(a:highlights)
 
-  " Find attributes to be set in the terminal
-  for attr in [ "bold", "italic", "reverse", "underline", "undercurl" ]
-    let hl.cterm[attr] = ''
-    if hl.gui[attr] == 1
-      if s:attr_map(attr) != ''
-        let hl.cterm[ s:attr_map(attr) ] = 1
+    " Find attributes to be set in the terminal
+    for attr in [ "bold", "italic", "reverse", "underline", "undercurl" ]
+      let hl.cterm[attr] = ''
+      if hl.gui[attr] == 1
+        if s:attr_map(attr) != ''
+          let hl.cterm[ s:attr_map(attr) ] = 1
+        endif
       endif
-    endif
-  endfor
+    endfor
 
-  for color in [ "bg", "fg" ]
-    let eff_color = color
+    for color in [ "bg", "fg" ]
+      let eff_color = color
+      if hl.cterm['reverse']
+        let eff_color = (color == 'bg' ? 'fg' : 'bg')
+      endif
+
+      let hl.cterm[color] = get(hl.gui, s:attr_map(eff_color), '')
+    endfor
+
+    if hl.gui['sp'] != '' && s:attr_map('sp') != ''
+      let hl.cterm[s:attr_map('sp')] = hl.gui['sp']
+    endif
+
+    if hl.cterm['reverse'] && hl.cterm.bg == ''
+      let hl.cterm.bg = 'fg'
+    endif
+
+    if hl.cterm['reverse'] && hl.cterm.fg == ''
+      let hl.cterm.fg = 'bg'
+    endif
+
     if hl.cterm['reverse']
-      let eff_color = (color == 'bg' ? 'fg' : 'bg')
+      let hl.cterm.reverse = ''
     endif
-
-    let hl.cterm[color] = get(hl.gui, s:attr_map(eff_color), '')
   endfor
-
-  if hl.gui['sp'] != '' && s:attr_map('sp') != ''
-    let hl.cterm[s:attr_map('sp')] = hl.gui['sp']
-  endif
-
-  if hl.cterm['reverse'] && hl.cterm.bg == ''
-    let hl.cterm.bg = 'fg'
-  endif
-
-  if hl.cterm['reverse'] && hl.cterm.fg == ''
-    let hl.cterm.fg = 'bg'
-  endif
-
-  if hl.cterm['reverse']
-    let hl.cterm.reverse = ''
-  endif
 endfunction
 
 " {>2} Set cterm colors for a highlight group
 " Given the information for a single highlight group (ie, the value of
-" one of the items in s:Highlights()), uses s:FixupCtermInfo to parse the
-" structure and normalize it for use on a cterm, then handles matching the
-" gvim colors to the closest cterm colors by calling the approximator
-" specified with g:CSApprox_approximator_function and sets the colors and
-" attributes appropriately to match the gui.  The final colors are saved in
-" s:highlights for use by CSApproxSnapshot.
+" one of the items in s:Highlights() already normalized with s:FixupCtermInfo
+" and s:FixupGuiInfo), handle matching the gvim colors to the closest cterm
+" colors by calling the appropriate approximator as specified with the
+" g:CSApprox_approximator_function variable and set the colors and attributes
+" appropriately to match the gui.
 function! s:SetCtermFromGui(hl)
   let hl = a:hl
-
-  call s:FixupCtermInfo(hl)
 
   " Set up the default approximator function, if needed
   if !exists("g:CSApprox_approximator_function")
@@ -492,10 +502,8 @@ endfunction
 
 " {>1} Top-level control
 
-" {>2} Variable storing highlights between runs
-" This allows us to remember what the highlights looked like when we last ran,
-" which can be used by CSApproxSnapshot to post-process the results.
-let s:highlights = {}
+" Cache the highlight ID of the normal group; it's used often and won't change
+let s:hlid_normal = hlID('Normal')
 
 " {>2} Builtin cterm color names above 15
 " Vim defines some color name to high color mappings internally (see
@@ -540,13 +548,63 @@ let s:presets_256 += [229] " LightYellow
 " to ensure that the Normal group is the first group we set.  If it weren't,
 " we could get E419 or E420 if a later color used guibg=bg or the likes.
 function! s:SortNormalFirst(num1, num2)
-  if a:num1 == hlID('Normal') && a:num1 != a:num2
+  if a:num1 == s:hlid_normal && a:num1 != a:num2
     return -1
-  elseif a:num2 == hlID('Normal') && a:num1 != a:num2
+  elseif a:num2 == s:hlid_normal && a:num1 != a:num2
     return 1
   else
     return 0
   endif
+endfunction
+
+" {>2} Wrapper around :exe to allow :executing multiple commands.
+" "cmd" is the command to be :executed.
+" If the variable is a String, it is :executed.
+" If the variable is a List, each element is :executed.
+function! s:exe(cmd)
+  if type(a:cmd) == type('')
+    exe a:cmd
+  else
+    for cmd in a:cmd
+      call s:exe(cmd)
+    endfor
+  endif
+endfunction
+
+" {>2} Function to handle hooks
+" Prototype: HandleHooks(type [, scheme])
+" "type" is the type of hook to be executed, ie. "pre" or "post"
+" "scheme" is the name of the colorscheme that is currently active, if known
+"
+" If the variables g:CSApprox_hook_{type} and g:CSApprox_hook_{scheme}_{type}
+" exist, this will :execute them in that order.  If one does not exist, it
+" will silently be ignored.
+"
+" If the scheme name contains characters that are invalid in a variable name,
+" they will simply be removed.  Ie, g:colors_name = "123 foo_bar-baz456"
+" becomes "foo_barbaz456"
+"
+" NOTE: Exceptions will be printed out, rather than end processing early.  The
+" rationale is that it is worse for the user to fix the hook in an editor with
+" broken colors.  :)
+function! s:HandleHooks(type, ...)
+  let type = a:type
+  let scheme = (a:0 == 1 ? a:1 : "")
+  let scheme = substitute(scheme, '[^[:alnum:]_]', '', 'g')
+  let scheme = substitute(scheme, '^\d\+', '', '')
+
+  for cmd in [ 'g:CSApprox_hook_' . type,
+             \ 'g:CSApprox_' . scheme . '_hook_' . type,
+             \ 'g:CSApprox_hook_' . scheme . '_' . type ]
+    if exists(cmd)
+      try
+        call s:exe(eval(cmd))
+      catch
+        echomsg "Error processing " . cmd . ":"
+        echomsg v:exception
+      endtry
+    endif
+  endfor
 endfunction
 
 " {>2} Main function
@@ -585,8 +643,12 @@ function! s:CSApprox()
       let g:CSApprox_verbose_level = 1
     endif
 
+    call s:HandleHooks("pre", (exists("colors_name") ? colors_name : ""))
+
     " Set 'verbose' set to the maximum of &verbose and CSApprox_verbose_level
     exe max([&vbs, g:CSApprox_verbose_level]) 'verbose call s:CSApproxImpl()'
+
+    call s:HandleHooks("post", (exists("colors_name") ? colors_name : ""))
   finally
     if exists("colors_name")
       let g:colors_name = colors_name
@@ -620,16 +682,6 @@ function! s:CSApproxImpl()
   " Get the current highlight colors
   let highlights = s:Highlights()
 
-  " If the Normal group is cleared, set it to gvim's default, black on white
-  " Though this would be a really weird thing for a scheme to do... *shrug*
-  if highlights[hlID('Normal')].gui.bg == ''
-    let highlights[hlID('Normal')].gui.bg = 'white'
-  endif
-
-  if highlights[hlID('Normal')].gui.fg == ''
-    let highlights[hlID('Normal')].gui.fg = 'black'
-  endif
-
   let hinums = keys(highlights)
 
   " Make sure that the script is not already 256 color by checking to make
@@ -650,6 +702,9 @@ function! s:CSApproxImpl()
     endif
   endfor
 
+  call s:FixupGuiInfo(highlights)
+  call s:FixupCtermInfo(highlights)
+
   " We need to set the Normal group first so 'bg' and 'fg' work as colors
   call sort(hinums, "s:SortNormalFirst")
 
@@ -657,9 +712,6 @@ function! s:CSApproxImpl()
   for hlid in hinums
     call s:SetCtermFromGui(highlights[hlid])
   endfor
-
-  " and finally, store the new highlights for use in CSApproxSnapshot()
-  let s:highlights = copy(highlights)
 endfunction
 
 " {>2} Write out the current colors to an 88/256 color colorscheme file.
@@ -681,6 +733,19 @@ function! s:CSApproxSnapshot(file, overwrite)
     return
   endif
 
+  " Sigh... This is basically a bug, but one that I have no chance of fixing.
+  " Vim decides that Pmenu should be highlighted in 'LightMagenta' in terminal
+  " vim and as 'Magenta' in gvim...  And I can't ask it what color it actually
+  " *wants*.  As far as I can see, there's no way for me to learn that
+  " I should output 'Magenta' when 'LightMagenta' is provided by vim for the
+  " terminal.
+  if !has('gui_running')
+    echohl WarningMsg
+    echomsg "Warning: The written colorscheme may have incorrect colors"
+    echomsg "         when CSApproxSnapshot is used in terminal vim!"
+    echohl None
+  endif
+
   let save_t_Co = &t_Co
 
   try
@@ -698,13 +763,15 @@ function! s:CSApproxSnapshot(file, overwrite)
 
     let lines += [ 'if 0' ]
     for &t_Co in [ 256, 88 ]
+      let highlights = s:Highlights()
+      call s:FixupGuiInfo(highlights)
       let lines += [ 'elseif has("gui_running") || &t_Co == ' . &t_Co ]
-      for hlnum in sort(keys(s:highlights), "s:SortNormalFirst")
-        let hl = s:highlights[hlnum]
+      for hlnum in sort(keys(highlights), "s:SortNormalFirst")
+        let hl = highlights[hlnum]
         let line = '    highlight ' . hl.name
         for type in [ 'term', 'cterm', 'gui' ]
-          let attrs = [ 'bold', 'italic', 'underline', 'undercurl' ]
-          call filter(attrs, 'hl.cterm[v:val] == 1')
+          let attrs = [ 'reverse', 'bold', 'italic', 'underline', 'undercurl' ]
+          call filter(attrs, 'hl[type][v:val] == 1')
           let line .= ' ' . type . '=' . (empty(attrs) ? 'NONE' : join(attrs, ','))
           if type != 'term'
             let line .= ' ' . type . 'bg=' . (len(hl[type].bg) ? hl[type].bg : 'bg')
