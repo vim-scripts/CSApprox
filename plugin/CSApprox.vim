@@ -1,7 +1,7 @@
 " CSApprox:    Make gvim-only colorschemes Just Work terminal vim
-" Maintainer:  Matthew Wozniski (mjw@drexel.edu)
-" Date:        Wed, 01 Apr 2009 22:10:19 -0400
-" Version:     3.50
+" Maintainer:  Matthew Wozniski (godlygeek@gmail.com)
+" Date:        Fri, 14 Sep 2012 01:12:13 -0400
+" Version:     4.00
 " History:     :help csapprox-changelog
 "
 " Long Description:
@@ -23,13 +23,13 @@
 " high color already.
 "
 " License:
-" Copyright (c) 2009, Matthew J. Wozniski
+" Copyright (c) 2012, Matthew J. Wozniski
 " All rights reserved.
 "
 " Redistribution and use in source and binary forms, with or without
 " modification, are permitted provided that the following conditions are met:
-"     * Redistributions of source code must retain the above copyright notice,
-"       this list of conditions and the following disclaimer.
+"     * Redistributions of source code must retain the above copyright
+"       notice, this list of conditions and the following disclaimer.
 "     * Redistributions in binary form must reproduce the above copyright
 "       notice, this list of conditions and the following disclaimer in the
 "       documentation and/or other materials provided with the distribution.
@@ -37,16 +37,16 @@
 "       products derived from this software without specific prior written
 "       permission.
 "
-" THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDER ``AS IS'' AND ANY EXPRESS
-" OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
-" OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
-" NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY DIRECT, INDIRECT,
-" INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-" LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA,
-" OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
-" LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
-" NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
-" EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+" THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDER ``AS IS'' AND ANY
+" EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+" WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+" DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY
+" DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+" (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+" LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+" ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+" (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+" SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 " {>1} Basic plugin setup
 
@@ -54,19 +54,15 @@
 " Quit if the user doesn't want or need us or is missing the gui feature.  We
 " need +gui to be able to check the gui color settings; vim doesn't bother to
 " store them if it is not built with +gui.
-if !has('gui') || exists('g:CSApprox_loaded')
-  " XXX This depends upon knowing the default for g:CSApprox_verbose_level
-  let s:verbose = 1
-  if exists("g:CSApprox_verbose_level")
-    let s:verbose  = g:CSApprox_verbose_level
-  endif
-
-  if ! has('gui') && s:verbose > 0
+if exists('g:CSApprox_loaded')
+  finish
+elseif !has('gui') && v:version < 703
+  " Vim versions less than < 7.3.0 need +gui.
+  " Warn unless the user set g:CSApprox_verbose_level to zero.
+  if get(g:, 'CSApprox_verbose_level', 1)
     echomsg "CSApprox needs gui support - not loading."
     echomsg "  See :help |csapprox-+gui| for possible workarounds."
   endif
-
-  unlet s:verbose
 
   finish
 endif
@@ -76,110 +72,6 @@ let g:CSApprox_loaded = 1
 
 let s:savecpo = &cpo
 set cpo&vim
-
-" {>1} Built-in approximation algorithm
-
-" {>2} Cube definitions
-let s:xterm_colors   = [ 0x00, 0x5F, 0x87, 0xAF, 0xD7, 0xFF ]
-let s:eterm_colors   = [ 0x00, 0x2A, 0x55, 0x7F, 0xAA, 0xD4 ]
-let s:konsole_colors = [ 0x00, 0x33, 0x66, 0x99, 0xCC, 0xFF ]
-let s:xterm_greys    = [ 0x08, 0x12, 0x1C, 0x26, 0x30, 0x3A,
-                       \ 0x44, 0x4E, 0x58, 0x62, 0x6C, 0x76,
-                       \ 0x80, 0x8A, 0x94, 0x9E, 0xA8, 0xB2,
-                       \ 0xBC, 0xC6, 0xD0, 0xDA, 0xE4, 0xEE ]
-
-let s:urxvt_colors   = [ 0x00, 0x8B, 0xCD, 0xFF ]
-let s:urxvt_greys    = [ 0x2E, 0x5C, 0x73, 0x8B,
-                       \ 0xA2, 0xB9, 0xD0, 0xE7 ]
-
-" {>2} Integer comparator
-" Used to sort the complete list of possible colors
-function! s:IntCompare(i1, i2)
-  return a:i1 == a:i2 ? 0 : a:i1 > a:i2 ? 1 : -1
-endfunc
-
-" {>2} Approximator
-" Takes 3 decimal values for r, g, and b, and returns the closest cube number.
-" Uses &term to determine which cube should be used, though if &term is set to
-" "xterm" or begins with "screen", the variables g:CSApprox_eterm and
-" g:CSApprox_konsole can be used to select a different palette.
-"
-" This approximator considers closeness based upon the individiual components.
-" For each of r, g, and b, it finds the closest cube component available on
-" the cube.  If the three closest matches can combine to form a valid color,
-" this color is used, otherwise we repeat the search with the greys removed,
-" meaning that the three new matches must make a valid color when combined.
-function! s:ApproximatePerComponent(r,g,b)
-  let hex = printf("%02x%02x%02x", a:r, a:g, a:b)
-
-  let greys  = (&t_Co == 88 ? s:urxvt_greys : s:xterm_greys)
-
-  if &t_Co == 88
-    let colors = s:urxvt_colors
-    let type = 'urxvt'
-  elseif ((&term ==# 'xterm' || &term =~# '^screen' || &term==# 'builtin_gui')
-       \   && exists('g:CSApprox_konsole') && g:CSApprox_konsole)
-       \ || &term =~? '^konsole'
-    let colors = s:konsole_colors
-    let type = 'konsole'
-  elseif ((&term ==# 'xterm' || &term =~# '^screen' || &term==# 'builtin_gui')
-       \   && exists('g:CSApprox_eterm') && g:CSApprox_eterm)
-       \ || &term =~? '^eterm'
-    let colors = s:eterm_colors
-    let type = 'eterm'
-  else
-    let colors = s:xterm_colors
-    let type = 'xterm'
-  endif
-
-  if !exists('s:approximator_cache_'.type)
-    let s:approximator_cache_{type} = {}
-  endif
-
-  let rv = get(s:approximator_cache_{type}, hex, -1)
-  if rv != -1
-    return rv
-  endif
-
-  " Only obtain sorted list once
-  if !exists("s:".type."_greys_colors")
-    let s:{type}_greys_colors = sort(greys + colors, "s:IntCompare")
-  endif
-
-  let greys_colors = s:{type}_greys_colors
-
-  let r = s:NearestElemInList(a:r, greys_colors)
-  let g = s:NearestElemInList(a:g, greys_colors)
-  let b = s:NearestElemInList(a:b, greys_colors)
-
-  let len = len(colors)
-  if (r == g && g == b && index(greys, r) != -1)
-    let rv = 16 + len * len * len + index(greys, r)
-  else
-    let r = s:NearestElemInList(a:r, colors)
-    let g = s:NearestElemInList(a:g, colors)
-    let b = s:NearestElemInList(a:b, colors)
-    let rv = index(colors, r) * len * len
-         \ + index(colors, g) * len
-         \ + index(colors, b)
-         \ + 16
-  endif
-
-  let s:approximator_cache_{type}[hex] = rv
-  return rv
-endfunction
-
-" {>2} Color comparator
-" Finds the nearest element to the given element in the given list
-function! s:NearestElemInList(elem, list)
-  let len = len(a:list)
-  for i in range(len-1)
-    if (a:elem <= (a:list[i] + a:list[i+1]) / 2)
-      return a:list[i]
-    endif
-  endfor
-  return a:list[len-1]
-endfunction
 
 " {>1} Collect info for the set highlights
 
@@ -225,7 +117,7 @@ function! s:Highlights(modes)
 
     for where in a:modes
       let rv[i][where]  = {}
-      for attr in [ "bold", "italic", "reverse", "underline", "undercurl" ]
+      for attr in s:PossibleAttributes()
         let rv[i][where][attr] = synIDattr(i, attr, where)
       endfor
 
@@ -393,6 +285,11 @@ endfunction
 
 " {>1} Derive and set cterm attributes
 
+" {>2} List of all possible attributes
+function! s:PossibleAttributes()
+  return [ "bold", "italic", "reverse", "underline", "undercurl" ]
+endfunction
+
 " {>2} Attribute overrides
 " Allow the user to override a specified attribute with another attribute.
 " For example, the default is to map 'italic' to 'underline' (since many
@@ -414,8 +311,7 @@ function! s:NormalizeAttrMap(map)
   let old = copy(a:map)
   let new = filter(a:map, '0')
 
-  let valid_attrs = [ 'bg', 'fg', 'sp', 'bold', 'italic',
-                    \ 'reverse', 'underline', 'undercurl' ]
+  let valid_attrs = [ 'bg', 'fg', 'sp' ] + s:PossibleAttributes()
 
   let colorattrs = [ 'fg', 'bg', 'sp' ]
 
@@ -483,7 +379,7 @@ function! s:FixupCtermInfo(highlights)
     endif
 
     " Find attributes to be set in the terminal
-    for attr in [ "bold", "italic", "reverse", "underline", "undercurl" ]
+    for attr in s:PossibleAttributes()
       let hl.cterm[attr] = ''
       if hl.gui[attr] == 1
         if s:attr_map(attr) != ''
@@ -505,18 +401,25 @@ function! s:FixupCtermInfo(highlights)
       let hl.cterm[s:attr_map('sp')] = hl.gui['sp']
     endif
 
-    if hl.cterm['reverse'] && hl.cterm.bg == ''
-      let hl.cterm.bg = 'fg'
-    endif
+    if exists("g:CSApprox_fake_reverse") && g:CSApprox_fake_reverse
+      if hl.cterm['reverse'] && hl.cterm.bg == ''
+        let hl.cterm.bg = 'fg'
+      endif
 
-    if hl.cterm['reverse'] && hl.cterm.fg == ''
-      let hl.cterm.fg = 'bg'
-    endif
+      if hl.cterm['reverse'] && hl.cterm.fg == ''
+        let hl.cterm.fg = 'bg'
+      endif
 
-    if hl.cterm['reverse']
-      let hl.cterm.reverse = ''
+      if hl.cterm['reverse']
+        let hl.cterm.reverse = ''
+      endif
     endif
   endfor
+endfunction
+
+" {>2} Kludge around inability to reference autoload functions
+function! s:DefaultApproximator(...)
+  return call('csapprox#per_component#Approximate', a:000)
 endfunction
 
 " {>2} Set cterm colors for a highlight group
@@ -531,7 +434,7 @@ function! s:SetCtermFromGui(hl)
 
   " Set up the default approximator function, if needed
   if !exists("g:CSApprox_approximator_function")
-    let g:CSApprox_approximator_function=function("s:ApproximatePerComponent")
+    let g:CSApprox_approximator_function = function("s:DefaultApproximator")
   endif
 
   " Clear existing highlights
@@ -584,7 +487,7 @@ function! s:SetCtermFromGui(hl)
   endfor
 
   " Finally, set the attributes
-  let attrs = [ 'bold', 'italic', 'underline', 'undercurl' ]
+  let attrs = s:PossibleAttributes()
   call filter(attrs, 'hl.cterm[v:val] == 1')
 
   if !empty(attrs)
@@ -693,8 +596,15 @@ endfunction
 " main function.  This allows us to default to a message whenever any error,
 " even a recoverable one, occurs, meaning the user quickly finds out when
 " something's wrong, but makes it very easy for the user to make us silent.
-function! s:CSApprox()
+function! s:CSApprox(...)
   try
+    if a:0 == 1 && a:1
+      if !exists('s:inhibit_hicolor_test')
+        let s:inhibit_hicolor_test = 0
+      endif
+      let s:inhibit_hicolor_test += 1
+    endif
+
     let savelz  = &lz
 
     set lz
@@ -729,8 +639,12 @@ function! s:CSApprox()
 
     call s:HandleHooks("pre", (exists("colors_name") ? colors_name : ""))
 
+    let old_bg = &bg
+
     " Set 'verbose' set to the maximum of &verbose and CSApprox_verbose_level
     exe max([&vbs, g:CSApprox_verbose_level]) 'verbose call s:CSApproxImpl()'
+
+    let &bg = old_bg
 
     call s:HandleHooks("post", (exists("colors_name") ? colors_name : ""))
   finally
@@ -744,6 +658,13 @@ function! s:CSApprox()
     endif
 
     let &lz   = savelz
+
+    if a:0 == 1 && a:1
+      let s:inhibit_hicolor_test -= 1
+      if s:inhibit_hicolor_test == 0
+        unlet s:inhibit_hicolor_test
+      endif
+    endif
   endtry
 endfunction
 
@@ -755,7 +676,7 @@ endfunction
 function! s:CSApproxImpl()
   " Return if not running in an 88/256 color terminal
   if &t_Co != 256 && &t_Co != 88
-    if &verbose && !has('gui_running')
+    if &verbose && &t_Co != ''
       echomsg "CSApprox skipped; terminal only has" &t_Co "colors, not 88/256"
       echomsg "Try checking :help csapprox-terminal for workarounds"
     endif
@@ -873,6 +794,18 @@ function! s:CSApproxSnapshot(file, overwrite)
     let lines += [ '    command! -nargs=+ CSAHi exe "hi" <q-args>' ]
     let lines += [ 'endif' ]
     let lines += [ '' ]
+    let lines += [ 'function! s:old_kde()' ]
+    let lines += [ '  " Konsole only used its own palette up til KDE 4.2.0' ]
+    let lines += [ "  if executable('kde4-config') && system('kde4-config --kde-version') =~ '^4\.[10]\.'" ]
+    let lines += [ '    return 1' ]
+    let lines += [ "  elseif executable('kde-config') && system('kde-config --version') =~# 'KDE: 3\.'" ]
+    let lines += [ '    return 1' ]
+    let lines += [ '  else' ]
+    let lines += [ '    return 0' ]
+    let lines += [ '  endif' ]
+    let lines += [ 'endfunction' ]
+    let lines += [ '' ]
+
 
     let lines += [ 'if 0' ]
     for round in [ 'konsole', 'eterm', 'xterm', 'urxvt' ]
@@ -897,11 +830,17 @@ function! s:CSApproxSnapshot(file, overwrite)
       call s:FixupGuiInfo(highlights)
 
       if round == 'konsole' || round == 'eterm'
+        if round == 'konsole'
+          let term_matches_round = '(&term =~? "^konsole" && s:old_kde())'
+        else
+          let term_matches_round = '&term =~? "^' . round . '"'
+        endif
+
         let lines += [ 'elseif has("gui_running") || (&t_Co == ' . &t_Co
                    \ . ' && (&term ==# "xterm" || &term =~# "^screen")'
                    \ . ' && exists("g:CSApprox_' . round . '")'
                    \ . ' && g:CSApprox_' . round . ')'
-                   \ . ' || &term =~? "^' . round . '"' ]
+                   \ . ' || ' . term_matches_round ]
       else
         let lines += [ 'elseif has("gui_running") || &t_Co == ' . &t_Co ]
       endif
@@ -914,7 +853,7 @@ function! s:CSApproxSnapshot(file, overwrite)
         let hl = highlights[hlnum]
         let line = '    CSAHi ' . hl.name
         for type in [ 'term', 'cterm', 'gui' ]
-          let attrs = [ 'reverse', 'bold', 'italic', 'underline', 'undercurl' ]
+          let attrs = s:PossibleAttributes()
           call filter(attrs, 'hl[type][v:val] == 1')
           let line .= ' ' . type . '=' . (empty(attrs) ? 'NONE' : join(attrs, ','))
           if type != 'term'
@@ -963,21 +902,16 @@ endfunction
 command! -bang -nargs=1 -complete=file -bar CSApproxSnapshot
         \ call s:CSApproxSnapshot(<f-args>, strlen("<bang>"))
 
-" {>1} Hooks
+" {>2} Manual updates
+command -bang -bar CSApprox call s:CSApprox(strlen("<bang>"))
 
-" {>2} Autocmds
+" {>1} Autocmds
 " Set up an autogroup to hook us on the completion of any :colorscheme command
 augroup CSApprox
   au!
   au ColorScheme * call s:CSApprox()
   "au User CSApproxPost highlight Normal ctermbg=none | highlight NonText ctermbg=None
 augroup END
-
-" {>2} Execute
-" The last thing to do when sourced is to run and actually fix up the colors.
-if !has('gui_running')
-  call s:CSApprox()
-endif
 
 " {>1} Restore compatibility options
 let &cpo = s:savecpo
